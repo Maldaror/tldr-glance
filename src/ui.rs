@@ -1,8 +1,13 @@
+use std::io::stdout;
 use std::time::Duration;
 
 use anyhow::Result;
 use chrono::NaiveDate;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+    MouseEventKind,
+};
+use crossterm::execute;
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -217,8 +222,10 @@ pub fn run(
     status: String,
 ) -> Result<()> {
     let mut terminal = ratatui::init();
+    execute!(stdout(), EnableMouseCapture)?;
     let mut app = App::new(client, start_date, max_back, groups, status);
     let result = event_loop(&mut terminal, &mut app);
+    let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -228,71 +235,193 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
         terminal.draw(|f| draw(f, app))?;
 
         if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
 
-                if app.settings_open {
-                    match key.code {
-                        KeyCode::Esc => app.settings_cancel(),
-                        KeyCode::Char('j') | KeyCode::Down => app.settings_next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.settings_prev(),
-                        KeyCode::Char(' ') => app.settings_toggle(),
-                        KeyCode::Enter => {
-                            let chosen = app.settings_chosen();
-                            if chosen.is_empty() {
-                                app.message = Some("Mindestens eine Edition auswählen.".to_string());
-                            } else {
-                                app.message = Some("Lade neue Editionen…".to_string());
-                                terminal.draw(|f| draw(f, app))?;
-                                app.apply_editions(chosen);
+                    if app.settings_open {
+                        match key.code {
+                            KeyCode::Esc => app.settings_cancel(),
+                            KeyCode::Char('j') | KeyCode::Down => app.settings_next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.settings_prev(),
+                            KeyCode::Char(' ') => app.settings_toggle(),
+                            KeyCode::Enter => {
+                                let chosen = app.settings_chosen();
+                                if chosen.is_empty() {
+                                    app.message = Some("Mindestens eine Edition auswählen.".to_string());
+                                } else {
+                                    app.message = Some("Lade neue Editionen…".to_string());
+                                    terminal.draw(|f| draw(f, app))?;
+                                    app.apply_editions(chosen);
+                                }
                             }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('s') => app.open_settings(),
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.next();
+                            app.message = None;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.prev();
+                            app.message = None;
+                        }
+                        KeyCode::Char('g') | KeyCode::Home => {
+                            let tab = app.current_mut();
+                            if !tab.stories.is_empty() {
+                                tab.state.select(Some(0));
+                            }
+                            app.message = None;
+                        }
+                        KeyCode::Char('G') | KeyCode::End => {
+                            let tab = app.current_mut();
+                            let len = tab.stories.len();
+                            if len > 0 {
+                                tab.state.select(Some(len - 1));
+                            }
+                            app.message = None;
+                        }
+                        KeyCode::Enter | KeyCode::Char('o') => app.open_selected(),
+                        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
+                        KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
+                        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                            let idx = c.to_digit(10).unwrap() as usize - 1;
+                            app.goto_tab(idx);
                         }
                         _ => {}
                     }
-                    continue;
                 }
-
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('s') => app.open_settings(),
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.next();
-                        app.message = None;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        app.prev();
-                        app.message = None;
-                    }
-                    KeyCode::Char('g') | KeyCode::Home => {
-                        let tab = app.current_mut();
-                        if !tab.stories.is_empty() {
-                            tab.state.select(Some(0));
-                        }
-                        app.message = None;
-                    }
-                    KeyCode::Char('G') | KeyCode::End => {
-                        let tab = app.current_mut();
-                        let len = tab.stories.len();
-                        if len > 0 {
-                            tab.state.select(Some(len - 1));
-                        }
-                        app.message = None;
-                    }
-                    KeyCode::Enter | KeyCode::Char('o') => app.open_selected(),
-                    KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
-                    KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
-                    KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                        let idx = c.to_digit(10).unwrap() as usize - 1;
-                        app.goto_tab(idx);
-                    }
-                    _ => {}
+                Event::Mouse(mouse) => {
+                    let size = terminal.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    handle_mouse(app, mouse, area);
                 }
+                _ => {}
             }
         }
     }
     Ok(())
+}
+
+fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
+    if app.settings_open {
+        let (list_area, _) = settings_layout(area);
+        match mouse.kind {
+            MouseEventKind::ScrollDown => app.settings_next(),
+            MouseEventKind::ScrollUp => app.settings_prev(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(idx) = row_index_in_list(list_area, mouse.column, mouse.row, 0) {
+                    if idx < config::ALL_EDITIONS.len() {
+                        app.settings_cursor = idx;
+                        app.settings_toggle();
+                    }
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    let (tabs_area, list_area, detail_area, _status_area) = main_layout(area);
+
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            app.next();
+            app.message = None;
+        }
+        MouseEventKind::ScrollUp => {
+            app.prev();
+            app.message = None;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if point_in(tabs_area, mouse.column, mouse.row) {
+                if let Some(idx) = tab_index_at(app, tabs_area, mouse.column, mouse.row) {
+                    app.goto_tab(idx);
+                }
+            } else if point_in(list_area, mouse.column, mouse.row) {
+                let offset = app.current().state.offset();
+                if let Some(idx) = row_index_in_list(list_area, mouse.column, mouse.row, offset) {
+                    if idx < app.current().stories.len() {
+                        if app.current().state.selected() == Some(idx) {
+                            app.open_selected();
+                        } else {
+                            app.current_mut().state.select(Some(idx));
+                            app.message = None;
+                        }
+                    }
+                }
+            } else if point_in(detail_area, mouse.column, mouse.row) {
+                app.open_selected();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn point_in(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
+}
+
+/// Maps a click row to a story index, accounting for the block border and the
+/// list's current scroll offset (as tracked by ListState after the last render).
+fn row_index_in_list(area: Rect, x: u16, y: u16, offset: usize) -> Option<usize> {
+    let inner = inner_area(area);
+    if !point_in(inner, x, y) {
+        return None;
+    }
+    Some(offset + (y - inner.y) as usize)
+}
+
+fn inner_area(area: Rect) -> Rect {
+    Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2))
+}
+
+/// Approximates which tab title was clicked by re-computing the same widths
+/// the Tabs widget lays out with (" N NAME (count) " + "│" divider).
+fn tab_index_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+    let inner = inner_area(area);
+    if !point_in(inner, x, y) {
+        return None;
+    }
+    let mut cursor = inner.x;
+    for (i, t) in app.tabs.iter().enumerate() {
+        let title = format!(" {} {} ({}) ", i + 1, t.name.to_uppercase(), t.stories.len());
+        let width = title.chars().count() as u16;
+        if x >= cursor && x < cursor + width {
+            return Some(i);
+        }
+        cursor += width + 1;
+    }
+    None
+}
+
+fn main_layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(chunks[1]);
+
+    (chunks[0], body[0], body[1], chunks[2])
+}
+
+fn settings_layout(area: Rect) -> (Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+    (chunks[0], chunks[1])
 }
 
 fn draw(f: &mut Frame, app: &mut App) {
@@ -301,22 +430,12 @@ fn draw(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let area = f.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1)])
-        .split(area);
+    let (tabs_area, list_area, detail_area, status_area) = main_layout(f.area());
 
-    draw_tabs(f, chunks[0], app);
-
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(chunks[1]);
-
-    draw_list(f, body[0], app);
-    draw_detail(f, body[1], app);
-    draw_status(f, chunks[2], app);
+    draw_tabs(f, tabs_area, app);
+    draw_list(f, list_area, app);
+    draw_detail(f, detail_area, app);
+    draw_status(f, status_area, app);
 }
 
 fn category_color(category: &str) -> Color {
@@ -342,7 +461,7 @@ fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" TLDR — 1-9 / Tab / ←→ wechseln, j/k bewegen, Enter/o öffnen, s Einstellungen, q beenden "),
+                .title(" TLDR — 1-9/Tab/←→/Klick wechseln, j/k/Scroll/Klick bewegen, Enter/o/Klick öffnen, s Einstellungen, q beenden "),
         )
         .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Black).bg(Color::Cyan))
         .divider("│");
@@ -437,20 +556,17 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
     let footer_text = app
         .message
         .clone()
-        .unwrap_or_else(|| "j/k bewegen, Space togglen, Enter übernehmen & speichern, Esc abbrechen".to_string());
+        .unwrap_or_else(|| "j/k/Scroll bewegen, Space/Klick togglen, Enter übernehmen & speichern, Esc abbrechen".to_string());
 
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(area);
+    let (list_area, footer_area) = settings_layout(area);
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(" Editionen auswählen "))
         .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
         .highlight_symbol("➤ ");
 
-    f.render_stateful_widget(list, outer[0], &mut list_state);
+    f.render_stateful_widget(list, list_area, &mut list_state);
 
     let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
-    f.render_widget(footer, outer[1]);
+    f.render_widget(footer, footer_area);
 }
