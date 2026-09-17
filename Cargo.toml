@@ -14,3 +14,5 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4", features = ["derive"] }
 scraper = "0.20"
 url = "2"
+toml = "0.8"
+dirs = "5"

@@ -7,6 +7,38 @@ use crate::model::{RawStory, Story};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
+/// Fetches every edition in `editions`, keeping them as separate groups
+/// (one per tab in the UI) along with a human-readable status line.
+pub fn fetch_all(
+    client: &reqwest::blocking::Client,
+    editions: &[String],
+    start_date: NaiveDate,
+    max_back: i64,
+) -> (Vec<(String, Vec<Story>)>, String) {
+    let mut groups = Vec::new();
+    let mut status_parts = Vec::new();
+
+    for edition in editions {
+        match fetch_edition_latest(client, edition, start_date, max_back) {
+            Ok((used_date, stories)) => {
+                let note = if used_date == start_date {
+                    format!("{edition}: {used_date} ({})", stories.len())
+                } else {
+                    format!("{edition}: {used_date} [neueste verfügbare] ({})", stories.len())
+                };
+                status_parts.push(note);
+                groups.push((edition.clone(), stories));
+            }
+            Err(e) => {
+                status_parts.push(format!("{edition}: FEHLER ({e})"));
+                groups.push((edition.clone(), Vec::new()));
+            }
+        }
+    }
+
+    (groups, status_parts.join("  |  "))
+}
+
 /// Fetches the newest available edition for `edition` starting at `start_date`,
 /// walking backwards up to `max_back` days if an edition is missing or empty.
 pub fn fetch_edition_latest(

@@ -1,3 +1,4 @@
+mod config;
 mod fetch;
 mod model;
 mod ui;
@@ -5,15 +6,16 @@ mod ui;
 use anyhow::Result;
 use chrono::Local;
 use clap::Parser;
-use model::Story;
 
 /// Schnelles Terminal-Scannen der täglichen TLDR-Newsletter.
 #[derive(Parser, Debug)]
 #[command(name = "tldr-glance")]
 struct Args {
-    /// Kommagetrennte Liste von TLDR-Editionen (siehe tldr.tech/newsletters)
-    #[arg(short, long, default_value = "tech,ai,dev")]
-    editions: String,
+    /// Kommagetrennte Liste von TLDR-Editionen; überschreibt für diesen Lauf
+    /// die gespeicherte Auswahl (siehe Einstellungen, Taste 's', oder
+    /// tldr.tech/newsletters für alle Slugs)
+    #[arg(short, long)]
+    editions: Option<String>,
 
     /// Datum der Ausgabe (YYYY-MM-DD), Standard: heute
     #[arg(short, long)]
@@ -35,34 +37,16 @@ fn main() -> Result<()> {
         None => Local::now().date_naive(),
     };
 
+    let editions: Vec<String> = match &args.editions {
+        Some(s) => s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        None => config::load().unwrap_or_default().editions,
+    };
+
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    // One group per edition, kept separate (not merged) so the TUI can show
-    // them as distinct tabs instead of one mixed list.
-    let mut groups: Vec<(String, Vec<Story>)> = Vec::new();
-    let mut status_parts = Vec::new();
-
-    for edition in args.editions.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        match fetch::fetch_edition_latest(&client, edition, start_date, args.max_back) {
-            Ok((used_date, stories)) => {
-                let note = if used_date == start_date {
-                    format!("{edition}: {used_date} ({})", stories.len())
-                } else {
-                    format!("{edition}: {used_date} [neueste verfügbare] ({})", stories.len())
-                };
-                status_parts.push(note);
-                groups.push((edition.to_string(), stories));
-            }
-            Err(e) => {
-                status_parts.push(format!("{edition}: FEHLER ({e})"));
-                groups.push((edition.to_string(), Vec::new()));
-            }
-        }
-    }
-
-    let status = status_parts.join("  |  ");
+    let (groups, status) = fetch::fetch_all(&client, &editions, start_date, args.max_back);
 
     if args.dump {
         for (edition, stories) in &groups {
@@ -83,6 +67,6 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    ui::run(groups, status)?;
+    ui::run(client, start_date, args.max_back, groups, status)?;
     Ok(())
 }

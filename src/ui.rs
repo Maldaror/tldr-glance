@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::NaiveDate;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     backend::Backend,
@@ -11,6 +12,8 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use crate::config;
+use crate::fetch;
 use crate::model::Story;
 
 struct EditionTab {
@@ -24,10 +27,24 @@ struct App {
     active: usize,
     status: String,
     message: Option<String>,
+
+    client: reqwest::blocking::Client,
+    start_date: NaiveDate,
+    max_back: i64,
+
+    settings_open: bool,
+    settings_cursor: usize,
+    settings_selected: Vec<bool>,
 }
 
 impl App {
-    fn new(groups: Vec<(String, Vec<Story>)>, status: String) -> Self {
+    fn new(
+        client: reqwest::blocking::Client,
+        start_date: NaiveDate,
+        max_back: i64,
+        groups: Vec<(String, Vec<Story>)>,
+        status: String,
+    ) -> Self {
         let tabs = groups
             .into_iter()
             .map(|(name, stories)| {
@@ -38,7 +55,18 @@ impl App {
                 EditionTab { name, stories, state }
             })
             .collect();
-        App { tabs, active: 0, status, message: None }
+        App {
+            tabs,
+            active: 0,
+            status,
+            message: None,
+            client,
+            start_date,
+            max_back,
+            settings_open: false,
+            settings_cursor: 0,
+            settings_selected: Vec::new(),
+        }
     }
 
     fn current(&self) -> &EditionTab {
@@ -112,11 +140,84 @@ impl App {
             });
         }
     }
+
+    fn open_settings(&mut self) {
+        let current_names: Vec<&str> = self.tabs.iter().map(|t| t.name.as_str()).collect();
+        self.settings_selected = config::ALL_EDITIONS
+            .iter()
+            .map(|(slug, _)| current_names.contains(slug))
+            .collect();
+        self.settings_cursor = 0;
+        self.settings_open = true;
+        self.message = None;
+    }
+
+    fn settings_cancel(&mut self) {
+        self.settings_open = false;
+        self.message = None;
+    }
+
+    fn settings_next(&mut self) {
+        if !config::ALL_EDITIONS.is_empty() {
+            self.settings_cursor = (self.settings_cursor + 1) % config::ALL_EDITIONS.len();
+        }
+    }
+
+    fn settings_prev(&mut self) {
+        if !config::ALL_EDITIONS.is_empty() {
+            self.settings_cursor = (self.settings_cursor + config::ALL_EDITIONS.len() - 1) % config::ALL_EDITIONS.len();
+        }
+    }
+
+    fn settings_toggle(&mut self) {
+        if let Some(v) = self.settings_selected.get_mut(self.settings_cursor) {
+            *v = !*v;
+        }
+    }
+
+    fn settings_chosen(&self) -> Vec<String> {
+        config::ALL_EDITIONS
+            .iter()
+            .zip(&self.settings_selected)
+            .filter(|(_, selected)| **selected)
+            .map(|((slug, _), _)| slug.to_string())
+            .collect()
+    }
+
+    /// Re-fetches the given editions, replaces the current tabs with them,
+    /// persists the selection to disk, and closes the settings dialog.
+    fn apply_editions(&mut self, editions: Vec<String>) {
+        let (groups, status) = fetch::fetch_all(&self.client, &editions, self.start_date, self.max_back);
+        self.tabs = groups
+            .into_iter()
+            .map(|(name, stories)| {
+                let mut state = ListState::default();
+                if !stories.is_empty() {
+                    state.select(Some(0));
+                }
+                EditionTab { name, stories, state }
+            })
+            .collect();
+        self.active = 0;
+        self.status = status;
+        self.message = None;
+        self.settings_open = false;
+
+        if let Err(e) = config::save(&config::Config { editions }) {
+            self.message = Some(format!("Konnte Einstellungen nicht speichern: {e}"));
+        }
+    }
 }
 
-pub fn run(groups: Vec<(String, Vec<Story>)>, status: String) -> Result<()> {
+pub fn run(
+    client: reqwest::blocking::Client,
+    start_date: NaiveDate,
+    max_back: i64,
+    groups: Vec<(String, Vec<Story>)>,
+    status: String,
+) -> Result<()> {
     let mut terminal = ratatui::init();
-    let mut app = App::new(groups, status);
+    let mut app = App::new(client, start_date, max_back, groups, status);
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
     result
@@ -131,8 +232,31 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+
+                if app.settings_open {
+                    match key.code {
+                        KeyCode::Esc => app.settings_cancel(),
+                        KeyCode::Char('j') | KeyCode::Down => app.settings_next(),
+                        KeyCode::Char('k') | KeyCode::Up => app.settings_prev(),
+                        KeyCode::Char(' ') => app.settings_toggle(),
+                        KeyCode::Enter => {
+                            let chosen = app.settings_chosen();
+                            if chosen.is_empty() {
+                                app.message = Some("Mindestens eine Edition auswählen.".to_string());
+                            } else {
+                                app.message = Some("Lade neue Editionen…".to_string());
+                                terminal.draw(|f| draw(f, app))?;
+                                app.apply_editions(chosen);
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('s') => app.open_settings(),
                     KeyCode::Char('j') | KeyCode::Down => {
                         app.next();
                         app.message = None;
@@ -172,6 +296,11 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
 }
 
 fn draw(f: &mut Frame, app: &mut App) {
+    if app.settings_open {
+        draw_settings(f, f.area(), app);
+        return;
+    }
+
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -213,7 +342,7 @@ fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" TLDR — 1-9 / Tab / ←→ wechseln, j/k bewegen, Enter/o öffnen, q beenden "),
+                .title(" TLDR — 1-9 / Tab / ←→ wechseln, j/k bewegen, Enter/o öffnen, s Einstellungen, q beenden "),
         )
         .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Black).bg(Color::Cyan))
         .divider("│");
@@ -279,4 +408,49 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     let text = app.message.clone().unwrap_or_else(|| app.status.clone());
     let p = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
     f.render_widget(p, area);
+}
+
+fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
+    let items: Vec<ListItem> = config::ALL_EDITIONS
+        .iter()
+        .enumerate()
+        .map(|(i, (slug, desc))| {
+            let checked = app.settings_selected.get(i).copied().unwrap_or(false);
+            let marker = if checked { "[x] " } else { "[ ] " };
+            let marker_style = if checked {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let line = Line::from(vec![
+                Span::styled(marker, marker_style),
+                Span::styled(format!("{slug:<10} "), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(*desc, Style::default().fg(Color::Gray)),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.settings_cursor));
+
+    let footer_text = app
+        .message
+        .clone()
+        .unwrap_or_else(|| "j/k bewegen, Space togglen, Enter übernehmen & speichern, Esc abbrechen".to_string());
+
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Editionen auswählen "))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
+        .highlight_symbol("➤ ");
+
+    f.render_stateful_widget(list, outer[0], &mut list_state);
+
+    let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
+    f.render_widget(footer, outer[1]);
 }
