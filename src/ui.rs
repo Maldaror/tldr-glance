@@ -261,7 +261,10 @@ pub fn run(
     result
 }
 
-fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
+where
+    <B as Backend>::Error: std::error::Error + Send + Sync + 'static,
+{
     loop {
         terminal.draw(|f| draw(f, app))?;
 
