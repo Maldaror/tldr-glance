@@ -27,6 +27,30 @@ pub const ALL_EDITIONS: &[(&str, &str)] = &[
 pub const BROWSERS: &[&str] =
     &["Systemstandard", "Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser"];
 
+/// Best-effort check whether `<app_name>.app` sits in one of the standard
+/// Applications directories. Doesn't launch or reveal anything, so it's safe
+/// to call just to filter a menu.
+fn is_installed(app_name: &str) -> bool {
+    let bundle = format!("{app_name}.app");
+    let mut dirs = vec![PathBuf::from("/Applications"), PathBuf::from("/System/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join("Applications"));
+    }
+    dirs.iter().any(|dir| dir.join(&bundle).exists())
+}
+
+/// Browser choices for the settings dialog: "Systemstandard" plus every
+/// entry from `BROWSERS` that is actually installed. `current` (the
+/// currently configured browser, if any) is always included even if its app
+/// can no longer be found, so an existing config is never silently altered.
+pub fn available_browsers(current: Option<&str>) -> Vec<String> {
+    let mut list = vec![BROWSERS[0].to_string()];
+    list.extend(
+        BROWSERS[1..].iter().filter(|name| is_installed(name) || current == Some(**name)).map(|name| name.to_string()),
+    );
+    list
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub editions: Vec<String>,

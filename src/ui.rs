@@ -43,6 +43,7 @@ struct App {
     settings_tab: usize,
     settings_cursor: usize,
     settings_selected: Vec<bool>,
+    settings_browsers: Vec<String>,
     browser_cursor: usize,
 }
 
@@ -80,6 +81,7 @@ impl App {
             settings_tab: 0,
             settings_cursor: 0,
             settings_selected: Vec::new(),
+            settings_browsers: Vec::new(),
             browser_cursor: 0,
         }
     }
@@ -168,21 +170,22 @@ impl App {
             .collect();
         self.settings_cursor = 0;
         self.settings_tab = 0;
+        self.settings_browsers = config::available_browsers(self.browser.as_deref());
         self.browser_cursor = self
             .browser
             .as_deref()
-            .and_then(|name| config::BROWSERS.iter().position(|b| *b == name))
+            .and_then(|name| self.settings_browsers.iter().position(|b| b == name))
             .unwrap_or(0);
         self.settings_open = true;
         self.message = None;
     }
 
     fn browser_next(&mut self) {
-        self.browser_cursor = (self.browser_cursor + 1) % config::BROWSERS.len();
+        self.browser_cursor = (self.browser_cursor + 1) % self.settings_browsers.len();
     }
 
     fn browser_prev(&mut self) {
-        self.browser_cursor = (self.browser_cursor + config::BROWSERS.len() - 1) % config::BROWSERS.len();
+        self.browser_cursor = (self.browser_cursor + self.settings_browsers.len() - 1) % self.settings_browsers.len();
     }
 
     fn settings_tab_next(&mut self) {
@@ -253,8 +256,8 @@ impl App {
     /// applies the chosen browser, persists both to disk, and closes the
     /// settings dialog.
     fn apply_settings(&mut self, editions: Vec<String>) {
-        let browser = match config::BROWSERS.get(self.browser_cursor) {
-            Some(&name) if self.browser_cursor != 0 => Some(name.to_string()),
+        let browser = match self.settings_browsers.get(self.browser_cursor) {
+            Some(name) if self.browser_cursor != 0 => Some(name.clone()),
             _ => None,
         };
         self.browser = browser.clone();
@@ -407,7 +410,7 @@ fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) 
                             }
                         }
                         _ => {
-                            if idx < config::BROWSERS.len() {
+                            if idx < app.settings_browsers.len() {
                                 app.browser_cursor = idx;
                             }
                         }
@@ -705,7 +708,8 @@ fn draw_settings_editions(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_settings_browser(f: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = config::BROWSERS.iter().map(|name| ListItem::new(Line::from(*name))).collect();
+    let items: Vec<ListItem> =
+        app.settings_browsers.iter().map(|name| ListItem::new(Line::from(name.as_str()))).collect();
 
     let mut list_state = ListState::default();
     list_state.select(Some(app.browser_cursor));
