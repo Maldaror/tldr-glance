@@ -24,8 +24,17 @@ pub const ALL_EDITIONS: &[(&str, &str)] = &[
 /// Browser choices offered in the settings dialog. The first entry means "use
 /// the system default", stored as `None` in `Config::browser`; the rest are
 /// passed to `open -a <name>` and must match the app's macOS display name.
-pub const BROWSERS: &[&str] =
-    &["Systemstandard", "Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser"];
+pub const BROWSERS: &[&str] = &[
+    "Systemstandard",
+    "Safari",
+    "Google Chrome",
+    "Firefox",
+    "Microsoft Edge",
+    "Brave Browser",
+    "Vivaldi",
+    "Opera",
+    "Arc",
+];
 
 /// Best-effort check whether `<app_name>.app` sits in one of the standard
 /// Applications directories. Doesn't launch or reveal anything, so it's safe
