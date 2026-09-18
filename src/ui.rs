@@ -37,9 +37,12 @@ struct App {
     start_date: NaiveDate,
     max_back: i64,
 
+    browser: Option<String>,
+
     settings_open: bool,
     settings_cursor: usize,
     settings_selected: Vec<bool>,
+    browser_cursor: usize,
 }
 
 impl App {
@@ -49,6 +52,7 @@ impl App {
         max_back: i64,
         groups: Vec<(String, Vec<Story>)>,
         status: String,
+        browser: Option<String>,
     ) -> Self {
         let tabs = groups
             .into_iter()
@@ -68,9 +72,11 @@ impl App {
             client,
             start_date,
             max_back,
+            browser,
             settings_open: false,
             settings_cursor: 0,
             settings_selected: Vec::new(),
+            browser_cursor: 0,
         }
     }
 
@@ -138,7 +144,11 @@ impl App {
     fn open_selected(&mut self) {
         if let Some(story) = self.selected_story() {
             let url = story.url.clone();
-            let result = std::process::Command::new("open").arg(&url).spawn();
+            let mut cmd = std::process::Command::new("open");
+            if let Some(browser) = &self.browser {
+                cmd.arg("-a").arg(browser);
+            }
+            let result = cmd.arg(&url).spawn();
             self.message = Some(match result {
                 Ok(_) => format!("Im Browser geöffnet: {url}"),
                 Err(e) => format!("Konnte Browser nicht öffnen ({e}): {url}"),
@@ -153,8 +163,21 @@ impl App {
             .map(|(slug, _)| current_names.contains(slug))
             .collect();
         self.settings_cursor = 0;
+        self.browser_cursor = self
+            .browser
+            .as_deref()
+            .and_then(|name| config::BROWSERS.iter().position(|b| *b == name))
+            .unwrap_or(0);
         self.settings_open = true;
         self.message = None;
+    }
+
+    fn browser_next(&mut self) {
+        self.browser_cursor = (self.browser_cursor + 1) % config::BROWSERS.len();
+    }
+
+    fn browser_prev(&mut self) {
+        self.browser_cursor = (self.browser_cursor + config::BROWSERS.len() - 1) % config::BROWSERS.len();
     }
 
     fn settings_cancel(&mut self) {
@@ -190,8 +213,15 @@ impl App {
     }
 
     /// Re-fetches the given editions, replaces the current tabs with them,
-    /// persists the selection to disk, and closes the settings dialog.
-    fn apply_editions(&mut self, editions: Vec<String>) {
+    /// applies the chosen browser, persists both to disk, and closes the
+    /// settings dialog.
+    fn apply_settings(&mut self, editions: Vec<String>) {
+        let browser = match config::BROWSERS.get(self.browser_cursor) {
+            Some(&name) if self.browser_cursor != 0 => Some(name.to_string()),
+            _ => None,
+        };
+        self.browser = browser.clone();
+
         let (groups, status) = fetch::fetch_all(&self.client, &editions, self.start_date, self.max_back);
         self.tabs = groups
             .into_iter()
@@ -208,7 +238,7 @@ impl App {
         self.message = None;
         self.settings_open = false;
 
-        if let Err(e) = config::save(&config::Config { editions }) {
+        if let Err(e) = config::save(&config::Config { editions, browser }) {
             self.message = Some(format!("Konnte Einstellungen nicht speichern: {e}"));
         }
     }
@@ -220,10 +250,11 @@ pub fn run(
     max_back: i64,
     groups: Vec<(String, Vec<Story>)>,
     status: String,
+    browser: Option<String>,
 ) -> Result<()> {
     let mut terminal = ratatui::init();
     execute!(stdout(), EnableMouseCapture)?;
-    let mut app = App::new(client, start_date, max_back, groups, status);
+    let mut app = App::new(client, start_date, max_back, groups, status, browser);
     let result = event_loop(&mut terminal, &mut app);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -247,6 +278,8 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
                             KeyCode::Char('j') | KeyCode::Down => app.settings_next(),
                             KeyCode::Char('k') | KeyCode::Up => app.settings_prev(),
                             KeyCode::Char(' ') => app.settings_toggle(),
+                            KeyCode::Left | KeyCode::Char('h') => app.browser_prev(),
+                            KeyCode::Right | KeyCode::Char('l') => app.browser_next(),
                             KeyCode::Enter => {
                                 let chosen = app.settings_chosen();
                                 if chosen.is_empty() {
@@ -254,7 +287,7 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
                                 } else {
                                     app.message = Some("Lade neue Editionen…".to_string());
                                     terminal.draw(|f| draw(f, app))?;
-                                    app.apply_editions(chosen);
+                                    app.apply_settings(chosen);
                                 }
                             }
                             _ => {}
@@ -312,12 +345,14 @@ fn event_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<(
 
 fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
     if app.settings_open {
-        let (list_area, _) = settings_layout(area);
+        let (browser_area, list_area, _) = settings_layout(area);
         match mouse.kind {
             MouseEventKind::ScrollDown => app.settings_next(),
             MouseEventKind::ScrollUp => app.settings_prev(),
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(idx) = row_index_in_list(list_area, mouse.column, mouse.row, 0) {
+                if point_in(browser_area, mouse.column, mouse.row) {
+                    app.browser_next();
+                } else if let Some(idx) = row_index_in_list(list_area, mouse.column, mouse.row, 0) {
                     if idx < config::ALL_EDITIONS.len() {
                         app.settings_cursor = idx;
                         app.settings_toggle();
@@ -416,12 +451,12 @@ fn main_layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
     (chunks[0], body[0], body[1], chunks[2])
 }
 
-fn settings_layout(area: Rect) -> (Rect, Rect) {
+fn settings_layout(area: Rect) -> (Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    (chunks[0], chunks[1])
+    (chunks[0], chunks[1], chunks[2])
 }
 
 fn draw(f: &mut Frame, app: &mut App) {
@@ -553,12 +588,21 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
     let mut list_state = ListState::default();
     list_state.select(Some(app.settings_cursor));
 
-    let footer_text = app
-        .message
-        .clone()
-        .unwrap_or_else(|| "j/k/Scroll bewegen, Space/Klick togglen, Enter übernehmen & speichern, Esc abbrechen".to_string());
+    let footer_text = app.message.clone().unwrap_or_else(|| {
+        "j/k/Scroll bewegen, Space/Klick togglen, ←/→ Browser wechseln, Enter übernehmen & speichern, Esc abbrechen"
+            .to_string()
+    });
 
-    let (list_area, footer_area) = settings_layout(area);
+    let (browser_area, list_area, footer_area) = settings_layout(area);
+
+    let browser_name = config::BROWSERS.get(app.browser_cursor).copied().unwrap_or("Systemstandard");
+    let browser_box = Paragraph::new(Line::from(vec![
+        Span::raw("← "),
+        Span::styled(browser_name, Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+        Span::raw(" →"),
+    ]))
+    .block(Block::default().borders(Borders::ALL).title(" Browser zum Öffnen von Links "));
+    f.render_widget(browser_box, browser_area);
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(" Editionen auswählen "))

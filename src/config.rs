@@ -21,14 +21,22 @@ pub const ALL_EDITIONS: &[(&str, &str)] = &[
     ("hardware", "Hardware"),
 ];
 
+/// Browser choices offered in the settings dialog. The first entry means "use
+/// the system default", stored as `None` in `Config::browser`; the rest are
+/// passed to `open -a <name>` and must match the app's macOS display name.
+pub const BROWSERS: &[&str] =
+    &["Systemstandard", "Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub editions: Vec<String>,
+    #[serde(default)]
+    pub browser: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { editions: vec!["tech".into(), "ai".into(), "dev".into()] }
+        Config { editions: vec!["tech".into(), "ai".into(), "dev".into()], browser: None }
     }
 }
 

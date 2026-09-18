@@ -37,9 +37,10 @@ fn main() -> Result<()> {
         None => Local::now().date_naive(),
     };
 
+    let config = config::load().unwrap_or_default();
     let editions: Vec<String> = match &args.editions {
         Some(s) => s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        None => config::load().unwrap_or_default().editions,
+        None => config.editions,
     };
 
     let client = reqwest::blocking::Client::builder()
@@ -67,6 +68,6 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    ui::run(client, start_date, args.max_back, groups, status)?;
+    ui::run(client, start_date, args.max_back, groups, status, config.browser)?;
     Ok(())
 }

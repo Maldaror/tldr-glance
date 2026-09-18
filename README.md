@@ -42,19 +42,23 @@ cargo run -- [optionen]
 | `k` / `↑` | Vorheriger Artikel |
 | `g` / `Pos1` | Zum ersten Artikel springen |
 | `G` / `Ende` | Zum letzten Artikel springen |
-| `Enter` / `o` | Markierten Artikel im Standardbrowser öffnen |
-| `s` | Einstellungen (Editionen auswählen) öffnen |
+| `Enter` / `o` | Markierten Artikel im gewählten Browser öffnen (Standardbrowser, falls nicht anders eingestellt) |
+| `s` | Einstellungen (Editionen und Browser) öffnen |
 | `q` / `Esc` | Beenden (bzw. Einstellungen ohne Speichern verlassen) |
 
 ### Einstellungen
 
-Mit `s` öffnet sich eine Liste aller verfügbaren TLDR-Editionen (`tech`, `ai`, `dev`, `infosec`,
-`devops`, `data`, …). `j`/`k` bewegt den Cursor, `Leertaste` togglet eine Edition an/aus, `Enter`
-übernimmt die Auswahl, lädt sie sofort neu und speichert sie dauerhaft; `Esc` verwirft die Änderung.
+Mit `s` öffnet sich der Einstellungsdialog. Oben lässt sich mit `←`/`→` (bzw. `h`/`l`) der Browser
+wählen, mit dem Artikel geöffnet werden (Systemstandard, Safari, Google Chrome, Firefox, Microsoft
+Edge, Brave Browser). Darunter steht die Liste aller verfügbaren TLDR-Editionen (`tech`, `ai`, `dev`,
+`infosec`, `devops`, `data`, …): `j`/`k` bewegt den Cursor, `Leertaste` togglet eine Edition an/aus.
+`Enter` übernimmt beide Auswahlen, lädt die Editionen sofort neu und speichert alles dauerhaft;
+`Esc` verwirft die Änderung.
 
 ## Konfiguration
 
-Die zuletzt in den Einstellungen gewählten Editionen werden gespeichert unter:
+Die zuletzt in den Einstellungen gewählten Editionen und der gewählte Browser werden gespeichert
+unter:
 
 ```
 ~/Library/Application Support/tldr-glance/config.toml
@@ -62,6 +66,7 @@ Die zuletzt in den Einstellungen gewählten Editionen werden gespeichert unter:
 
 ```toml
 editions = ["tech", "ai", "dev"]
+browser = "Google Chrome"  # weggelassen oder null = Systemstandard
 ```
 
 Die Datei kann auch von Hand editiert werden. Alle gültigen Slugs stehen unter
