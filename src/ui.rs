@@ -40,10 +40,13 @@ struct App {
     browser: Option<String>,
 
     settings_open: bool,
+    settings_tab: usize,
     settings_cursor: usize,
     settings_selected: Vec<bool>,
     browser_cursor: usize,
 }
+
+const SETTINGS_TABS: [&str; 2] = ["Editionen", "Browser"];
 
 impl App {
     fn new(
@@ -74,6 +77,7 @@ impl App {
             max_back,
             browser,
             settings_open: false,
+            settings_tab: 0,
             settings_cursor: 0,
             settings_selected: Vec::new(),
             browser_cursor: 0,
@@ -163,6 +167,7 @@ impl App {
             .map(|(slug, _)| current_names.contains(slug))
             .collect();
         self.settings_cursor = 0;
+        self.settings_tab = 0;
         self.browser_cursor = self
             .browser
             .as_deref()
@@ -178,6 +183,35 @@ impl App {
 
     fn browser_prev(&mut self) {
         self.browser_cursor = (self.browser_cursor + config::BROWSERS.len() - 1) % config::BROWSERS.len();
+    }
+
+    fn settings_tab_next(&mut self) {
+        self.settings_tab = (self.settings_tab + 1) % SETTINGS_TABS.len();
+    }
+
+    fn settings_tab_prev(&mut self) {
+        self.settings_tab = (self.settings_tab + SETTINGS_TABS.len() - 1) % SETTINGS_TABS.len();
+    }
+
+    fn goto_settings_tab(&mut self, idx: usize) {
+        if idx < SETTINGS_TABS.len() {
+            self.settings_tab = idx;
+        }
+    }
+
+    /// Moves the cursor within whichever settings tab is active.
+    fn settings_move_next(&mut self) {
+        match self.settings_tab {
+            0 => self.settings_next(),
+            _ => self.browser_next(),
+        }
+    }
+
+    fn settings_move_prev(&mut self) {
+        match self.settings_tab {
+            0 => self.settings_prev(),
+            _ => self.browser_prev(),
+        }
     }
 
     fn settings_cancel(&mut self) {
@@ -198,6 +232,9 @@ impl App {
     }
 
     fn settings_toggle(&mut self) {
+        if self.settings_tab != 0 {
+            return;
+        }
         if let Some(v) = self.settings_selected.get_mut(self.settings_cursor) {
             *v = !*v;
         }
@@ -278,11 +315,15 @@ where
                     if app.settings_open {
                         match key.code {
                             KeyCode::Esc => app.settings_cancel(),
-                            KeyCode::Char('j') | KeyCode::Down => app.settings_next(),
-                            KeyCode::Char('k') | KeyCode::Up => app.settings_prev(),
+                            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.settings_tab_next(),
+                            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.settings_tab_prev(),
+                            KeyCode::Char('j') | KeyCode::Down => app.settings_move_next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.settings_move_prev(),
                             KeyCode::Char(' ') => app.settings_toggle(),
-                            KeyCode::Left | KeyCode::Char('h') => app.browser_prev(),
-                            KeyCode::Right | KeyCode::Char('l') => app.browser_next(),
+                            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                                let idx = c.to_digit(10).unwrap() as usize - 1;
+                                app.goto_settings_tab(idx);
+                            }
                             KeyCode::Enter => {
                                 let chosen = app.settings_chosen();
                                 if chosen.is_empty() {
@@ -348,17 +389,28 @@ where
 
 fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
     if app.settings_open {
-        let (browser_area, list_area, _) = settings_layout(area);
+        let (tabs_area, content_area, _) = settings_layout(area);
         match mouse.kind {
-            MouseEventKind::ScrollDown => app.settings_next(),
-            MouseEventKind::ScrollUp => app.settings_prev(),
+            MouseEventKind::ScrollDown => app.settings_move_next(),
+            MouseEventKind::ScrollUp => app.settings_move_prev(),
             MouseEventKind::Down(MouseButton::Left) => {
-                if point_in(browser_area, mouse.column, mouse.row) {
-                    app.browser_next();
-                } else if let Some(idx) = row_index_in_list(list_area, mouse.column, mouse.row, 0) {
-                    if idx < config::ALL_EDITIONS.len() {
-                        app.settings_cursor = idx;
-                        app.settings_toggle();
+                if point_in(tabs_area, mouse.column, mouse.row) {
+                    if let Some(idx) = settings_tab_index_at(tabs_area, mouse.column, mouse.row) {
+                        app.goto_settings_tab(idx);
+                    }
+                } else if let Some(idx) = row_index_in_list(content_area, mouse.column, mouse.row, 0) {
+                    match app.settings_tab {
+                        0 => {
+                            if idx < config::ALL_EDITIONS.len() {
+                                app.settings_cursor = idx;
+                                app.settings_toggle();
+                            }
+                        }
+                        _ => {
+                            if idx < config::BROWSERS.len() {
+                                app.browser_cursor = idx;
+                            }
+                        }
                     }
                 }
             }
@@ -431,6 +483,25 @@ fn tab_index_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
     let mut cursor = inner.x;
     for (i, t) in app.tabs.iter().enumerate() {
         let title = format!(" {} {} ({}) ", i + 1, t.name.to_uppercase(), t.stories.len());
+        let width = title.chars().count() as u16;
+        if x >= cursor && x < cursor + width {
+            return Some(i);
+        }
+        cursor += width + 1;
+    }
+    None
+}
+
+/// Approximates which settings tab title was clicked, mirroring the layout
+/// `draw_settings_tabs` renders (" N Name " + "│" divider).
+fn settings_tab_index_at(area: Rect, x: u16, y: u16) -> Option<usize> {
+    let inner = inner_area(area);
+    if !point_in(inner, x, y) {
+        return None;
+    }
+    let mut cursor = inner.x;
+    for (i, name) in SETTINGS_TABS.iter().enumerate() {
+        let title = format!(" {} {} ", i + 1, name);
         let width = title.chars().count() as u16;
         if x >= cursor && x < cursor + width {
             return Some(i);
@@ -568,6 +639,40 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
+    let (tabs_area, content_area, footer_area) = settings_layout(area);
+
+    draw_settings_tabs(f, tabs_area, app);
+    match app.settings_tab {
+        0 => draw_settings_editions(f, content_area, app),
+        _ => draw_settings_browser(f, content_area, app),
+    }
+
+    let hint = match app.settings_tab {
+        0 => "j/k/Scroll bewegen, Space/Klick togglen",
+        _ => "j/k/Scroll/Klick auswählen",
+    };
+    let footer_text = app
+        .message
+        .clone()
+        .unwrap_or_else(|| format!("1/2/Tab/←→ Reiter wechseln, {hint}, Enter übernehmen & speichern, Esc abbrechen"));
+    let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
+    f.render_widget(footer, footer_area);
+}
+
+fn draw_settings_tabs(f: &mut Frame, area: Rect, app: &App) {
+    let titles: Vec<Line> =
+        SETTINGS_TABS.iter().enumerate().map(|(i, name)| Line::from(format!(" {} {} ", i + 1, name))).collect();
+
+    let tabs = Tabs::new(titles)
+        .select(app.settings_tab)
+        .block(Block::default().borders(Borders::ALL).title(" Einstellungen "))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Black).bg(Color::Cyan))
+        .divider("│");
+
+    f.render_widget(tabs, area);
+}
+
+fn draw_settings_editions(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = config::ALL_EDITIONS
         .iter()
         .enumerate()
@@ -591,29 +696,24 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
     let mut list_state = ListState::default();
     list_state.select(Some(app.settings_cursor));
 
-    let footer_text = app.message.clone().unwrap_or_else(|| {
-        "j/k/Scroll bewegen, Space/Klick togglen, ←/→ Browser wechseln, Enter übernehmen & speichern, Esc abbrechen"
-            .to_string()
-    });
-
-    let (browser_area, list_area, footer_area) = settings_layout(area);
-
-    let browser_name = config::BROWSERS.get(app.browser_cursor).copied().unwrap_or("Systemstandard");
-    let browser_box = Paragraph::new(Line::from(vec![
-        Span::raw("← "),
-        Span::styled(browser_name, Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-        Span::raw(" →"),
-    ]))
-    .block(Block::default().borders(Borders::ALL).title(" Browser zum Öffnen von Links "));
-    f.render_widget(browser_box, browser_area);
-
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(" Editionen auswählen "))
         .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
         .highlight_symbol("➤ ");
 
-    f.render_stateful_widget(list, list_area, &mut list_state);
+    f.render_stateful_widget(list, area, &mut list_state);
+}
 
-    let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
-    f.render_widget(footer, footer_area);
+fn draw_settings_browser(f: &mut Frame, area: Rect, app: &App) {
+    let items: Vec<ListItem> = config::BROWSERS.iter().map(|name| ListItem::new(Line::from(*name))).collect();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.browser_cursor));
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Browser zum Öffnen von Links "))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
+        .highlight_symbol("➤ ");
+
+    f.render_stateful_widget(list, area, &mut list_state);
 }
