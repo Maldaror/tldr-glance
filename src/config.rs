@@ -74,15 +74,31 @@ impl Default for Config {
 }
 
 fn config_path() -> Result<PathBuf> {
-    let dir = dirs::config_dir().context("kein Config-Verzeichnis gefunden")?.join("tldr-glance");
+    let dir = dirs::home_dir().context("kein Home-Verzeichnis gefunden")?.join(".config").join("tldr-glance");
     Ok(dir.join("config.toml"))
 }
 
+/// Pre-migration config location (`~/Library/Application Support/tldr-glance`
+/// on macOS), kept only to pick up configs written by older versions.
+fn legacy_config_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("tldr-glance").join("config.toml"))
+}
+
 /// Loads the saved edition selection, or writes and returns the default if
-/// no config file exists yet.
+/// no config file exists yet. If a config from the pre-XDG location exists
+/// but the new one doesn't, it's moved over first.
 pub fn load() -> Result<Config> {
     let path = config_path()?;
     if !path.exists() {
+        if let Some(legacy_path) = legacy_config_path() {
+            if legacy_path.exists() && legacy_path != path {
+                let text = std::fs::read_to_string(&legacy_path)?;
+                let config: Config = toml::from_str(&text)?;
+                save(&config)?;
+                let _ = std::fs::remove_file(&legacy_path);
+                return Ok(config);
+            }
+        }
         let config = Config::default();
         save(&config)?;
         return Ok(config);
