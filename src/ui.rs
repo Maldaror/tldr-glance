@@ -150,11 +150,7 @@ impl App {
     fn open_selected(&mut self) {
         if let Some(story) = self.selected_story() {
             let url = story.url.clone();
-            let mut cmd = std::process::Command::new("open");
-            if let Some(browser) = &self.browser {
-                cmd.arg("-a").arg(browser);
-            }
-            let result = cmd.arg(&url).spawn();
+            let result = config::open_url(&url, self.browser.as_deref());
             self.message = Some(match result {
                 Ok(_) => format!("Im Browser geöffnet: {url}"),
                 Err(e) => format!("Konnte Browser nicht öffnen ({e}): {url}"),
