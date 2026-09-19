@@ -2,6 +2,10 @@
 name = "tldr-glance"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal-UI zum schnellen Scannen der TLDR-Newsletter"
+license = "MIT"
+repository = "https://github.com/maldaror/tldr-glance"
+authors = ["Mike Pinkert"]
 
 [dependencies]
 ratatui = "0.30"
