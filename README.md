@@ -6,6 +6,8 @@
 
 A fast terminal UI for daily-scanning the [TLDR](https://tldr.tech) newsletters.
 
+![tldr-glance terminal UI showing TLDR AI newsletter articles with summary details](assets/screenshot.png)
+
 > [!NOTE]
 > Runs on macOS and Linux/Unix. Developed and used day-to-day on macOS only — the Linux path
 > (browser detection via `$PATH`, opening via `xdg-open`) is new and hasn't been verified on an
