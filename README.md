@@ -27,6 +27,25 @@ images, exact quotes) noticeably loses quality compared to a real web clipper.
 
 ## Installation
 
+### Prebuilt binary
+
+Download the archive for your platform from the [latest release](https://github.com/maldaror/tldr-glance/releases/latest), then:
+
+```sh
+tar xzf tldr-glance-*.tar.gz
+cd tldr-glance-*
+./tldr-glance
+```
+
+On macOS the binary is unsigned, so Gatekeeper will refuse to open it on the first run. Either
+right-click the binary and choose "Open", or clear the quarantine flag once:
+
+```sh
+xattr -d com.apple.quarantine tldr-glance
+```
+
+### From source
+
 Requires a local Rust toolchain ([rustup.rs](https://rustup.rs)).
 
 ```sh
