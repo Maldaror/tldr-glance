@@ -15,11 +15,23 @@ pub fn fetch_all(
     start_date: NaiveDate,
     max_back: i64,
 ) -> (Vec<(String, Vec<Story>)>, String) {
+    // Editions are independent HTTP round-trips, so fetch them concurrently.
+    // `thread::scope` lets the threads borrow `client`/`edition` directly
+    // (reqwest's blocking client is Send + Sync) without cloning anything
+    // or requiring 'static data.
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = editions
+            .iter()
+            .map(|edition| scope.spawn(move || fetch_edition_latest(client, edition, start_date, max_back)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
     let mut groups = Vec::new();
     let mut status_parts = Vec::new();
 
-    for edition in editions {
-        match fetch_edition_latest(client, edition, start_date, max_back) {
+    for (edition, result) in editions.iter().zip(results) {
+        match result {
             Ok((used_date, stories)) => {
                 let note = if used_date == start_date {
                     format!("{edition}: {used_date} ({})", stories.len())
