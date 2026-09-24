@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
 use scraper::{Html, Selector};
 use serde_json::Value;
@@ -115,12 +115,24 @@ pub fn fetch_edition_latest(
 /// layout (seen on `ai`/`dev`) with the story data directly in the DOM. We
 /// try the JSON strategy first and fall back to DOM scraping.
 fn extract_stories(html: &str) -> Result<Vec<RawStory>> {
-    if let Ok(stories) = extract_stories_new_format(html) {
-        if !stories.is_empty() {
-            return Ok(stories);
-        }
-    }
-    extract_stories_old_format(html)
+    // Falling back to the old parser is the *normal* path for editions that
+    // never had the new template to begin with (ai/dev/...), so this can't
+    // log unconditionally without spamming every routine fetch. Instead,
+    // keep the new-format error and only surface it — folded into the old
+    // parser's error — on the one case that's actually diagnostic: both
+    // parsers failing on the same page. That error already flows through
+    // the existing Result chain up to fetch_edition_latest's last_err and
+    // from there into the status line / exit message, so no logging is
+    // needed either way.
+    let new_format_err = match extract_stories_new_format(html) {
+        Ok(stories) if !stories.is_empty() => return Ok(stories),
+        Ok(_) => None,
+        Err(e) => Some(e),
+    };
+    extract_stories_old_format(html).map_err(|old_err| match new_format_err {
+        Some(new_err) => anyhow!("neues Format: {new_err}; altes Format: {old_err}"),
+        None => old_err,
+    })
 }
 
 /// TLDR embeds the full story list as JSON inside Next.js RSC-hydration
@@ -252,6 +264,14 @@ fn extract_stories_old_format(html: &str) -> Result<Vec<RawStory>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_stories_reports_both_parser_errors_when_both_fail() {
+        let html = "<html><body>nothing here</body></html>";
+        let err = extract_stories(html).unwrap_err().to_string();
+        assert!(err.contains("neues Format"), "missing new-format reason: {err}");
+        assert!(err.contains("altes Format"), "missing old-format reason: {err}");
+    }
 
     #[test]
     fn extract_stories_new_format_handles_escaped_quotes() {
