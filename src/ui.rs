@@ -472,16 +472,16 @@ fn inner_area(area: Rect) -> Rect {
     Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2))
 }
 
-/// Approximates which tab title was clicked by re-computing the same widths
-/// the Tabs widget lays out with (" N NAME (count) " + "│" divider).
-fn tab_index_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+/// Finds which tab a click landed on, given the tabs' rendered titles in
+/// order (ratatui's `Tabs` widget doesn't expose click hit-testing itself,
+/// so this walks the same divider-separated layout it draws).
+fn tab_index_at_titles(area: Rect, x: u16, y: u16, titles: impl Iterator<Item = String>) -> Option<usize> {
     let inner = inner_area(area);
     if !point_in(inner, x, y) {
         return None;
     }
     let mut cursor = inner.x;
-    for (i, t) in app.tabs.iter().enumerate() {
-        let title = format!(" {} {} ({}) ", i + 1, t.name.to_uppercase(), t.stories.len());
+    for (i, title) in titles.enumerate() {
         let width = title.chars().count() as u16;
         if x >= cursor && x < cursor + width {
             return Some(i);
@@ -491,23 +491,23 @@ fn tab_index_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
     None
 }
 
-/// Approximates which settings tab title was clicked, mirroring the layout
-/// `draw_settings_tabs` renders (" N Name " + "│" divider).
+fn tab_index_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+    tab_index_at_titles(area, x, y, app.tabs.iter().enumerate().map(tab_title))
+}
+
 fn settings_tab_index_at(area: Rect, x: u16, y: u16) -> Option<usize> {
-    let inner = inner_area(area);
-    if !point_in(inner, x, y) {
-        return None;
-    }
-    let mut cursor = inner.x;
-    for (i, name) in SETTINGS_TABS.iter().enumerate() {
-        let title = format!(" {} {} ", i + 1, name);
-        let width = title.chars().count() as u16;
-        if x >= cursor && x < cursor + width {
-            return Some(i);
-        }
-        cursor += width + 1;
-    }
-    None
+    tab_index_at_titles(area, x, y, SETTINGS_TABS.iter().enumerate().map(|(i, name)| settings_tab_title(i, name)))
+}
+
+/// Shared with `draw_tabs` so the click hit-test and the rendered title can
+/// never drift apart.
+fn tab_title((i, t): (usize, &EditionTab)) -> String {
+    format!(" {} {} ({}) ", i + 1, t.name.to_uppercase(), t.stories.len())
+}
+
+/// Shared with `draw_settings_tabs`, same reasoning as `tab_title`.
+fn settings_tab_title(i: usize, name: &str) -> String {
+    format!(" {} {} ", i + 1, name)
 }
 
 fn main_layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
@@ -557,12 +557,7 @@ fn category_color(category: &str) -> Color {
 }
 
 fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
-    let titles: Vec<Line> = app
-        .tabs
-        .iter()
-        .enumerate()
-        .map(|(i, t)| Line::from(format!(" {} {} ({}) ", i + 1, t.name.to_uppercase(), t.stories.len())))
-        .collect();
+    let titles: Vec<Line> = app.tabs.iter().enumerate().map(|pair| Line::from(tab_title(pair))).collect();
 
     let tabs = Tabs::new(titles)
         .select(app.active)
@@ -660,7 +655,7 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_settings_tabs(f: &mut Frame, area: Rect, app: &App) {
     let titles: Vec<Line> =
-        SETTINGS_TABS.iter().enumerate().map(|(i, name)| Line::from(format!(" {} {} ", i + 1, name))).collect();
+        SETTINGS_TABS.iter().enumerate().map(|(i, name)| Line::from(settings_tab_title(i, name))).collect();
 
     let tabs = Tabs::new(titles)
         .select(app.settings_tab)
@@ -701,6 +696,25 @@ fn draw_settings_editions(f: &mut Frame, area: Rect, app: &App) {
         .highlight_symbol("➤ ");
 
     f.render_stateful_widget(list, area, &mut list_state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_tab_index_at_matches_rendered_titles() {
+        // " 1 Editionen " is 13 chars, " 2 Browser " is 11 — this pins the
+        // hit-test to whatever settings_tab_title() actually renders, so a
+        // format-string change can't silently desync the two again.
+        let area = Rect::new(0, 0, 40, 3);
+        assert_eq!(settings_tab_index_at(area, 1, 1), Some(0));
+        assert_eq!(settings_tab_index_at(area, 13, 1), Some(0));
+        assert_eq!(settings_tab_index_at(area, 14, 1), None); // divider
+        assert_eq!(settings_tab_index_at(area, 15, 1), Some(1));
+        assert_eq!(settings_tab_index_at(area, 25, 1), Some(1));
+        assert_eq!(settings_tab_index_at(area, 26, 1), None);
+    }
 }
 
 fn draw_settings_browser(f: &mut Frame, area: Rect, app: &App) {
