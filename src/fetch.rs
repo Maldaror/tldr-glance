@@ -64,20 +64,35 @@ pub fn fetch_edition_latest(
 
     for _ in 0..=max_back {
         let url = format!("https://tldr.tech/{edition}/{}", date.format("%Y-%m-%d"));
-        match client.get(&url).header(reqwest::header::USER_AGENT, USER_AGENT).send() {
-            Ok(resp) if resp.status().is_success() => match resp.text() {
-                Ok(html) => match extract_stories(&html) {
-                    Ok(raw_stories) if !raw_stories.is_empty() => {
-                        let stories = raw_stories.into_iter().map(Story::from_raw).collect();
-                        return Ok((date, stories));
-                    }
-                    Ok(_) => last_err = format!("{url}: keine Artikel im Payload"),
-                    Err(e) => last_err = format!("{url}: {e}"),
+
+        // tldr.tech's edge occasionally 404s a valid, just-published URL when
+        // hit concurrently with the other editions' requests (same URL
+        // succeeds moments later) — retry a couple of times on the same date
+        // before concluding the edition genuinely doesn't exist there.
+        let mut found = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            match client.get(&url).header(reqwest::header::USER_AGENT, USER_AGENT).send() {
+                Ok(resp) if resp.status().is_success() => match resp.text() {
+                    Ok(html) => match extract_stories(&html) {
+                        Ok(raw_stories) if !raw_stories.is_empty() => {
+                            found = Some(raw_stories);
+                            break;
+                        }
+                        Ok(_) => last_err = format!("{url}: keine Artikel im Payload"),
+                        Err(e) => last_err = format!("{url}: {e}"),
+                    },
+                    Err(e) => last_err = format!("{url}: Antwort nicht lesbar ({e})"),
                 },
-                Err(e) => last_err = format!("{url}: Antwort nicht lesbar ({e})"),
-            },
-            Ok(resp) => last_err = format!("{url}: HTTP {}", resp.status()),
-            Err(e) => last_err = format!("{url}: {e}"),
+                Ok(resp) => last_err = format!("{url}: HTTP {}", resp.status()),
+                Err(e) => last_err = format!("{url}: {e}"),
+            }
+        }
+        if let Some(raw_stories) = found {
+            let stories = raw_stories.into_iter().map(Story::from_raw).collect();
+            return Ok((date, stories));
         }
         date -= chrono::Duration::days(1);
     }
