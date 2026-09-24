@@ -47,7 +47,34 @@ fn main() -> Result<()> {
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    let (groups, status) = fetch::fetch_all(&client, &editions, start_date, args.max_back);
+    let (groups, status) = std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = scope.spawn(|| fetch::fetch_all(&client, &editions, start_date, args.max_back, Some(tx)));
+
+        let mut done: Vec<String> = Vec::new();
+        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let mut frame = 0;
+        loop {
+            while let Ok(edition) = rx.try_recv() {
+                done.push(edition);
+            }
+            let names = editions
+                .iter()
+                .map(|e| if done.contains(e) { format!("✓{e}") } else { e.clone() })
+                .collect::<Vec<_>>()
+                .join(" ");
+            print!("\r{} Lade Editionen -> {names}", frames[frame % frames.len()]);
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            if handle.is_finished() {
+                break;
+            }
+            frame += 1;
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        print!("\r\x1b[K");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        handle.join().unwrap()
+    });
 
     if args.dump {
         for (edition, stories) in &groups {

@@ -14,6 +14,7 @@ pub fn fetch_all(
     editions: &[String],
     start_date: NaiveDate,
     max_back: i64,
+    progress: Option<std::sync::mpsc::Sender<String>>,
 ) -> (Vec<(String, Vec<Story>)>, String) {
     // Editions are independent HTTP round-trips, so fetch them concurrently.
     // `thread::scope` lets the threads borrow `client`/`edition` directly
@@ -22,7 +23,16 @@ pub fn fetch_all(
     let results: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = editions
             .iter()
-            .map(|edition| scope.spawn(move || fetch_edition_latest(client, edition, start_date, max_back)))
+            .map(|edition| {
+                let progress = progress.clone();
+                scope.spawn(move || {
+                    let result = fetch_edition_latest(client, edition, start_date, max_back);
+                    if let Some(tx) = progress {
+                        tx.send(edition.clone()).ok();
+                    }
+                    result
+                })
+            })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });

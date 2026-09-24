@@ -258,7 +258,7 @@ impl App {
         };
         self.browser = browser.clone();
 
-        let (groups, status) = fetch::fetch_all(&self.client, &editions, self.start_date, self.max_back);
+        let (groups, status) = fetch::fetch_all(&self.client, &editions, self.start_date, self.max_back, None);
         self.tabs = groups
             .into_iter()
             .map(|(name, stories)| {
