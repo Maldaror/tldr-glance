@@ -115,10 +115,10 @@ pub fn fetch_edition_latest(
 /// layout (seen on `ai`/`dev`) with the story data directly in the DOM. We
 /// try the JSON strategy first and fall back to DOM scraping.
 fn extract_stories(html: &str) -> Result<Vec<RawStory>> {
-    if let Ok(stories) = extract_stories_new_format(html) {
-        if !stories.is_empty() {
-            return Ok(stories);
-        }
+    match extract_stories_new_format(html) {
+        Ok(stories) if !stories.is_empty() => return Ok(stories),
+        Ok(_) => {}
+        Err(e) => eprintln!("neues Format fehlgeschlagen, falle zurück auf altes Template ({e})"),
     }
     extract_stories_old_format(html)
 }
@@ -138,16 +138,16 @@ fn extract_stories_new_format(html: &str) -> Result<Vec<RawStory>> {
     let mut search_from = 0usize;
 
     while let Some(rel_start) = html[search_from..].find(marker) {
-        let content_start = search_from + rel_start + marker.len();
-        let Some(content_end) = find_unescaped_quote(html, content_start) else {
+        // The marker ends right at the opening `"` of a JSON string; let
+        // serde_json itself find the matching closing quote and unescape
+        // the content, instead of hand-rolling an escape-aware scanner.
+        let quote_start = search_from + rel_start + marker.len() - 1;
+        let mut stream = serde_json::Deserializer::from_str(&html[quote_start..]).into_iter::<String>();
+        let Some(Ok(unescaped)) = stream.next() else {
             break;
         };
-        search_from = content_end;
+        search_from = quote_start + stream.byte_offset();
 
-        let escaped_chunk = &html[content_start..content_end];
-        let Ok(unescaped) = serde_json::from_str::<String>(&format!("\"{escaped_chunk}\"")) else {
-            continue;
-        };
         if !unescaped.contains("\"stories\":[") {
             continue;
         }
@@ -184,23 +184,6 @@ fn find_stories_array(value: &Value) -> Option<&Vec<Value>> {
         Value::Array(arr) => arr.iter().find_map(find_stories_array),
         _ => None,
     }
-}
-
-/// Finds the byte index of the next unescaped `"` starting at `from`.
-fn find_unescaped_quote(s: &str, from: usize) -> Option<usize> {
-    let mut escape = false;
-    for (i, c) in s[from..].char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        match c {
-            '\\' => escape = true,
-            '"' => return Some(from + i),
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Parses the older server-rendered TLDR template: `<section>` blocks with a
@@ -264,6 +247,26 @@ fn extract_stories_old_format(html: &str) -> Result<Vec<RawStory>> {
         bail!("altes Template erkannt, aber keine Artikel gefunden (Markup evtl. geändert)");
     }
     Ok(stories)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_stories_new_format_handles_escaped_quotes() {
+        // The payload itself contains a `"` (in the title) so it must be
+        // JSON-escaped once to become the RSC chunk's string content, and
+        // that whole string is what serde_json now has to unescape.
+        let payload = r#"1:[{"stories":[{"url":"https://example.com","title":"Say \"hi\"","summary":null,"topic":null,"category":null,"canonical_domain":null,"estimated_reading_minutes":5}]}]"#;
+        let escaped = serde_json::to_string(payload).unwrap();
+        let html = format!("<script>self.__next_f.push([1,{escaped}])</script>");
+
+        let stories = extract_stories_new_format(&html).unwrap();
+        assert_eq!(stories.len(), 1);
+        assert_eq!(stories[0].title, "Say \"hi\"");
+        assert_eq!(stories[0].estimated_reading_minutes, Some(5));
+    }
 }
 
 fn clean_text(s: &str) -> String {
