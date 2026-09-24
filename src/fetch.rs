@@ -115,10 +115,10 @@ pub fn fetch_edition_latest(
 /// layout (seen on `ai`/`dev`) with the story data directly in the DOM. We
 /// try the JSON strategy first and fall back to DOM scraping.
 fn extract_stories(html: &str) -> Result<Vec<RawStory>> {
-    match extract_stories_new_format(html) {
-        Ok(stories) if !stories.is_empty() => return Ok(stories),
-        Ok(_) => {}
-        Err(e) => eprintln!("neues Format fehlgeschlagen, falle zurück auf altes Template ({e})"),
+    if let Ok(stories) = extract_stories_new_format(html) {
+        if !stories.is_empty() {
+            return Ok(stories);
+        }
     }
     extract_stories_old_format(html)
 }
