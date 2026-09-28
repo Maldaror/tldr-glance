@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::stdout;
 use std::time::Duration;
 
@@ -546,13 +548,27 @@ fn draw(f: &mut Frame, app: &mut App) {
     draw_status(f, status_area, app);
 }
 
+const OLD_TEMPLATE_PALETTE: [Color; 6] = [
+    Color::Blue,
+    Color::Red,
+    Color::LightGreen,
+    Color::LightYellow,
+    Color::LightMagenta,
+    Color::LightCyan,
+];
+
 fn category_color(category: &str) -> Color {
     match category {
         "launch" => Color::Green,
         "practical" => Color::Cyan,
         "event" => Color::Yellow,
         "opinion" => Color::Magenta,
-        _ => Color::Gray,
+        _ => {
+            // ponytail: hash-based palette pick, not a curated per-section mapping; revisit if colors clash badly
+            let mut hasher = DefaultHasher::new();
+            category.hash(&mut hasher);
+            OLD_TEMPLATE_PALETTE[hasher.finish() as usize % OLD_TEMPLATE_PALETTE.len()]
+        }
     }
 }
 
